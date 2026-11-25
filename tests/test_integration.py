@@ -50,13 +50,17 @@ CHECK_OK = {
 CHECK_FAIL = {"success": False, "error": "sstp handshake timeout"}
 
 
-def build_handler(csv_body: str, payload: dict) -> type[BaseHTTPRequestHandler]:
+def build_handler(csv_body: str, payload: dict, expected_token: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - http.server 接口
             path = urlsplit(self.path).path
             if path == "/api":
                 body, ctype = csv_body.encode("utf-8"), "text/plain; charset=utf-8"
             elif path == "/check":
+                if self.headers.get("Authorization") != f"Bearer {expected_token}":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
                 body, ctype = json.dumps(payload).encode("utf-8"), "application/json"
             else:
                 self.send_response(404)
@@ -78,8 +82,8 @@ def build_handler(csv_body: str, payload: dict) -> type[BaseHTTPRequestHandler]:
 def server():
     servers: list[HTTPServer] = []
 
-    def start(csv_body: str, payload: dict) -> str:
-        httpd = HTTPServer(("127.0.0.1", 0), build_handler(csv_body, payload))
+    def start(csv_body: str, payload: dict, expected_token: str = "integration-test-token") -> str:
+        httpd = HTTPServer(("127.0.0.1", 0), build_handler(csv_body, payload, expected_token))
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         servers.append(httpd)
         return f"http://127.0.0.1:{httpd.server_address[1]}"
@@ -93,6 +97,7 @@ def server():
 def prepare_env(monkeypatch, base: str, public_dir, **extra):
     monkeypatch.setenv("VPNGATE_API", f"{base}/api")
     monkeypatch.setenv("CHECK_WORKER", f"{base}/check?sstp=vpn:vpn@")
+    monkeypatch.setenv("WORKER_TOKEN", "integration-test-token")
     monkeypatch.setenv("PUBLIC_DIR", str(public_dir))
     monkeypatch.setenv("OPTIMAL_API", "")
     monkeypatch.setenv("EDGE_HOSTS", "edge.example.com:443")
@@ -155,6 +160,31 @@ def test_main_fails_fast_without_worker_config(server, monkeypatch, tmp_path):
 
     assert excinfo.value.code == 2
     assert not (tmp_path / "public").exists()
+
+
+def test_main_fails_fast_without_worker_token(server, monkeypatch, tmp_path):
+    base = server(make_csv(), CHECK_OK)
+    prepare_env(monkeypatch, base, tmp_path / "public")
+    monkeypatch.delenv("WORKER_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        vpngate.main()
+
+    assert excinfo.value.code == 2
+    assert not (tmp_path / "public").exists()
+
+
+def test_main_rejects_wrong_worker_token_from_authenticating_server(server, monkeypatch, tmp_path):
+    base = server(make_csv(), CHECK_OK, expected_token="server-only-token")
+    public_dir = tmp_path / "public"
+    prepare_env(monkeypatch, base, public_dir)
+
+    with pytest.raises(SystemExit) as excinfo:
+        vpngate.main()
+
+    assert excinfo.value.code == 2
+    assert not (public_dir / "data.json").exists()
+    assert not (public_dir / "nodes.txt").exists()
 
 
 def test_derive_nodes_url_uses_github_repository(monkeypatch):
