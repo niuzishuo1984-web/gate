@@ -19,6 +19,7 @@ jobs:
       CF_SCRIPT_NAME: "gate-edgetunnel"
       CF_API_BASE: "https://api.cloudflare.com/client/v4"
       EXPECTED_ACTIVE_VERSION: "a1fd22b0-0143-4fb3-90fe-8412825161f8"
+      EXPECTED_LATEST_STAGED_VERSION: "361a12fd-afc5-4211-b7b9-671d5b6bddc8"
       EXPECTED_KV_ID: "7753e217441a4e948e62eee3d262b5e0"
       EXPECTED_SOURCE_SHA256: "6e77a97570b9a9371fc5b1ad91c66054fb18bbd34b892d4ce0046fc2ccddedaa"
       UPSTREAM_COMMIT: "5b2aaf0daf7fa1b126170877f64dd8d2e34c2746"
@@ -49,6 +50,25 @@ jobs:
             exit 1
           }
 
+          # Embedded at generation time from apply_mixed_only_patch.py; no checkout is used.
+          printf '%s' 'IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKaW1wb3J0IGhhc2hsaWIKaW1wb3J0IHJlCgpTT1VSQ0UgPSBQYXRoKCcvdG1wL2VkZ2V0dW5uZWwtc3JjL193b3JrZXIuanMnKQpPVVQgPSBQYXRoKCcvdG1wL2dhdGUtbWl4ZWQtcHJlcC9fd29ya2VyLnBhdGNoZWQuanMnKQpFWFBFQ1RFRCA9ICc2ZTc3YTk3NTcwYjlhOTM3MWZjNWIxYWQ5MWM2NjA1NGZiMThiYmQzNGI4OTJkNGNlMDA0NmZjMmNjZGRlZGFhJwpBRERfVVJMID0gJ2h0dHBzOi8vbml1emlzaHVvMTk4NC13ZWIuZ2l0aHViLmlvL2dhdGUvbm9kZXMudHh0JwoKc3JjID0gU09VUkNFLnJlYWRfYnl0ZXMoKQphY3R1YWwgPSBoYXNobGliLnNoYTI1NihzcmMpLmhleGRpZ2VzdCgpCmlmIGFjdHVhbCAhPSBFWFBFQ1RFRDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoZidmaXhlZCBzb3VyY2UgaGFzaCBtaXNtYXRjaDogZXhwZWN0ZWQge0VYUEVDVEVEfSwgZ290IHthY3R1YWx9JykKdGV4dCA9IHNyYy5kZWNvZGUoJ3V0Zi04LXNpZycpCgpkZWYgb25jZShvbGQsIG5ldyk6CiAgICBnbG9iYWwgdGV4dAogICAgbiA9IHRleHQuY291bnQob2xkKQogICAgaWYgbiAhPSAxOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoZidhbmNob3IgY291bnQge259LCBleHBlY3RlZCAxOiB7b2xkWzoxNjBdIXJ9JykKICAgIHRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpCgpkZWYgZXhhY3Qob2xkLCBuZXcsIG4pOgogICAgZ2xvYmFsIHRleHQKICAgIGMgPSB0ZXh0LmNvdW50KG9sZCkKICAgIGlmIGMgIT0gbjoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KGYnYW5jaG9yIGNvdW50IHtjfSwgZXhwZWN0ZWQge259OiB7b2xkWzoxNjBdIXJ9JykKICAgIHRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkLCBuZXcpCgojIFBvbGljeSBoZWxwZXJzIGFyZSBkZWxpYmVyYXRlbHkgbG9jYWwgYW5kIGRldGVybWluaXN0aWMuIEFERC50eHQgaXMgYW4gYWxsb3dsaXN0ZWQKIyBwb2ludGVyLCBub3QgYXJiaXRyYXJ5IGNvbnRlbnQ7IGV2ZXJ5IG91dGJvdW5kIGZldGNoIGlzIGNoZWNrZWQgYXQgdGhlIGNhbGwgc2l0ZS4KYW5jaG9yID0gImNvbnN0IOaxh+iBmuiuoumYhV9VQSA9ICd2MnJheU4vZWRnZScgKyAndHVubmVsIChodHRwczovL2dpdGh1Yi5jb20vJyArIOeJueW+geeggeWtl+WFuFsxXSArICcvZWRnZScgKyAndHVubmVsKSc7IgppbnNlcnQgPSBhbmNob3IgKyBmJycnXG5jb25zdCBNSVhFRF9PTkxZX0FERF9VUkwgPSB7QUREX1VSTCFyfTtcbmZ1bmN0aW9uIG1peGVkT25seU5vcm1hbGl6ZUNvbmZpZyhjKSB7e1xuICBpZiAoIWMgfHwgdHlwZW9mIGMgIT09ICdvYmplY3QnKSBjID0ge3t9fTtcbiAgaWYgKGMu5Y2P6K6u57G75Z6LICE9PSAndmxlc3MnKSB0aHJvdyBuZXcgRXJyb3IoJ21peGVkX29ubHk6IGNvbmZpZyBwcm90b2NvbCBtdXN0IGJlIHZsZXNzJyk7XG4gIGlmICghYy7kvJjpgInorqLpmIXnlJ/miJAgfHwgdHlwZW9mIGMu5LyY6YCJ6K6i6ZiF55Sf5oiQICE9PSAnb2JqZWN0JykgYy7kvJjpgInorqLpmIXnlJ/miJAgPSB7e319O1xuICBpZiAoIWMu5LyY6YCJ6K6i6ZiF55Sf5oiQLuacrOWcsElQ5bqTIHx8IHR5cGVvZiBjLuS8mOmAieiuoumYheeUn+aIkC7mnKzlnLBJUOW6kyAhPT0gJ29iamVjdCcpIGMu5LyY6YCJ6K6i6ZiF55Sf5oiQLuacrOWcsElQ5bqTID0ge3t9fTtcbiAgYy7kvJjpgInorqLpmIXnlJ/miJAubG9jYWwgPSB0cnVlO1xuICBjLuS8mOmAieiuoumYheeUn+aIkC7mnKzlnLBJUOW6ky7pmo/mnLpJUCA9IGZhbHNlO1xuICBjLlRHID0ge3sg5ZCv55SoOiBmYWxzZSwgQm90VG9rZW46IG51bGwsIENoYXRJRDogbnVsbCB9fTtcbiAgcmV0dXJuIGM7XG59fVxuZnVuY3Rpb24gbWl4ZWRPbmx5UGFyc2VBREQoYm9keSkge3tcbiAgY29uc3QgbGluZXMgPSBTdHJpbmcoYm9keSkuc3BsaXQoL1xccj9cXG4vKS5tYXAobGluZSA9PiBsaW5lLnRyaW0oKSkuZmlsdGVyKEJvb2xlYW4pO1xuICBpZiAoIWxpbmVzLmxlbmd0aCkgdGhyb3cgbmV3IEVycm9yKCdtaXhlZF9vbmx5OiBBREQgc291cmNlIGhhcyBubyBub2RlIGxpbmVzJyk7XG4gIHJldHVybiBsaW5lcy5tYXAoKGxpbmUsIGluZGV4KSA9PiB7e1xuICAgIGNvbnN0IG1hdGNoID0gbGluZS5tYXRjaCgvXihbXiNcXHNdKyk6KFxcZCspI1teI1xcc10rXFwkc3N0cDpcXC9cXC8oW15AXFxzXSspQChbXjovXFxzXSspOihcXGQrKSQvaSk7XG4gICAgaWYgKCFtYXRjaCkgdGhyb3cgbmV3IEVycm9yKGBtaXhlZF9vbmx5OiBpbnZhbGlkIFNTVFAgbGluZSAke3tpbmRleCArIDF9fWApO1xuICAgIGNvbnN0IHBvcnQgPSBOdW1iZXIobWF0Y2hbMl0pLCBzc3RwUG9ydCA9IE51bWJlcihtYXRjaFs1XSk7XG4gICAgaWYgKCFOdW1iZXIuaXNJbnRlZ2VyKHBvcnQpIHx8IHBvcnQgPCAxIHx8IHBvcnQgPiA2NTUzNSB8fCAhTnVtYmVyLmlzSW50ZWdlcihzc3RwUG9ydCkgfHwgc3N0cFBvcnQgPCAxIHx8IHNzdHBQb3J0ID4gNjU1MzUpIHRocm93IG5ldyBFcnJvcihgbWl4ZWRfb25seTogaW52YWxpZCBTU1RQIHBvcnQgb24gbGluZSAke3tpbmRleCArIDF9fWApO1xuICAgIHJldHVybiBsaW5lO1xuICB9fSk7XG59fVxuYXN5bmMgZnVuY3Rpb24gbWl4ZWRPbmx5UmVhZEFERChlbnYpIHt7XG4gIGNvbnN0IHBvaW50ZXIgPSBhd2FpdCBlbnYuS1YuZ2V0KCdBREQudHh0Jyk7XG4gIGlmIChwb2ludGVyICE9PSBNSVhFRF9PTkxZX0FERF9VUkwpIHRocm93IG5ldyBFcnJvcignbWl4ZWRfb25seTogQURELnR4dCBtdXN0IGVxdWFsIHRoZSBleGFjdCBhbGxvd2xpc3RlZCBVUkwnKTtcbiAgY29uc3QgdGFyZ2V0ID0gTUlYRURfT05MWV9BRERfVVJMO1xuICBpZiAodGFyZ2V0ICE9PSBNSVhFRF9PTkxZX0FERF9VUkwpIHRocm93IG5ldyBFcnJvcignbWl4ZWRfb25seTogb3V0Ym91bmQgVVJMIGd1YXJkJyk7XG4gIGNvbnN0IHJlc3BvbnNlID0gYXdhaXQgZmV0Y2godGFyZ2V0LCB7eyByZWRpcmVjdDogJ2Vycm9yJywgaGVhZGVyczoge3sgJ0FjY2VwdCc6ICd0ZXh0L3BsYWluJyB9fSB9fSk7XG4gIGlmICghcmVzcG9uc2Uub2spIHRocm93IG5ldyBFcnJvcignbWl4ZWRfb25seTogQUREIHNvdXJjZSB1bmF2YWlsYWJsZScpO1xuICBjb25zdCBib2R5ID0gYXdhaXQgcmVzcG9uc2UudGV4dCgpO1xuICBpZiAoIWJvZHkudHJpbSgpKSB0aHJvdyBuZXcgRXJyb3IoJ21peGVkX29ubHk6IEFERCBzb3VyY2UgZW1wdHknKTtcbiAgcmV0dXJuIG1peGVkT25seVBhcnNlQUREKGJvZHkpLmpvaW4oJ1xcbicpO1xufX0nJycKb25jZShhbmNob3IsIGluc2VydCkKCiMgTm8gcmVxdWVzdCBwYXRoIG1heSBlbWl0IG9yIHBlcnNpc3QgcmVxdWVzdCBsb2dzLiBUaGlzIGRpc2FibGVzIGJvdGggVGVsZWdyYW0gYW5kIEtWLgpvbGQgPSAnYXN5bmMgZnVuY3Rpb24g6K+35rGC5pel5b+X6K6w5b2VKGVudiwgcmVxdWVzdCwg6K6/6ZeuSVAsIOivt+axguexu+WeiyA9ICJHZXRfU1VCIiwgY29uZmlnX0pTT04sIOaYr+WQpuWGmeWFpUtW5pel5b+XID0gdHJ1ZSkge1xuXHR0cnkgeycKbmV3ID0gJ2FzeW5jIGZ1bmN0aW9uIOivt+axguaXpeW/l+iusOW9lShlbnYsIHJlcXVlc3QsIOiuv+mXrklQLCDor7fmsYLnsbvlnosgPSAiR2V0X1NVQiIsIGNvbmZpZ19KU09OLCDmmK/lkKblhpnlhaVLVuaXpeW/lyA9IHRydWUpIHtcblx0cmV0dXJuOyAvLyBtaXhlZF9vbmx5OiBURyBhbmQgS1YgcmVxdWVzdCBsb2dnaW5nIGFyZSBkaXNhYmxlZCBvbiBldmVyeSBwYXRoXG5cdHRyeSB7JwpvbmNlKG9sZCwgbmV3KQoKIyBOb3JtYWxpemUgYWZ0ZXIgYWxsIEtWL2NvbmZpZyBlbnJpY2htZW50LCBpbmNsdWRpbmcgbWFsaWNpb3VzIHBlcnNpc3RlZCBjb25maWcuCm9uY2UoJ1x0Y29uZmlnX0pTT04u5Yqg6L295pe26Ze0ID0gKHBlcmZvcm1hbmNlLm5vdygpIC0g5Yid5aeL5YyW5byA5aeL5pe26Ze0KS50b0ZpeGVkKDIpICsgXCdtc1wnO1xuXHRyZXR1cm4gY29uZmlnX0pTT047JywgIlx0Y29uZmlnX0pTT04gPSBtaXhlZE9ubHlOb3JtYWxpemVDb25maWcoY29uZmlnX0pTT04pO1xuXHRjb25maWdfSlNPTi7liqDovb3ml7bpl7QgPSAocGVyZm9ybWFuY2Uubm93KCkgLSDliJ3lp4vljJblvIDlp4vml7bpl7QpLnRvRml4ZWQoMikgKyAnbXMnO1xuXHRyZXR1cm4gY29uZmlnX0pTT047IikKCiMgTmV2ZXIgdXNlIGNyZWRlbnRpYWwtYmVhcmluZyBDbG91ZGZsYXJlIHVzYWdlIGVuZHBvaW50cyBmcm9tIHBlcnNpc3RlZCBjZi5qc29uLgpvbmNlKCdjb25zdCByZXNwb25zZSA9IGF3YWl0IGZldGNoKENGX0pTT04uVXNhZ2VBUEkpOycsICJ0aHJvdyBuZXcgRXJyb3IoJ21peGVkX29ubHk6IHJlbW90ZSB1c2FnZSBlbmRwb2ludCBkaXNhYmxlZCcpOyIpCm9uY2UoJ2NvbnN0IFVzYWdlID0gYXdhaXQgZ2V0Q2xvdWRmbGFyZVVzYWdlKENGX0pTT04uRW1haWwsIENGX0pTT04uR2xvYmFsQVBJS2V5LCBDRl9KU09OLkFjY291bnRJRCwgQ0ZfSlNPTi5BUElUb2tlbik7JywgImNvbnN0IFVzYWdlID0geyBzdWNjZXNzOiBmYWxzZSwgcGFnZXM6IDAsIHdvcmtlcnM6IDAsIHRvdGFsOiAwLCBtYXg6IDEwMDAwMCB9OyIpCm9uY2UoImNvbnNvbGUuZXJyb3IoYOivt+axgiBDRl9KU09OLlVzYWdlQVBJIOWksei0pTogJHtlcnIubWVzc2FnZX1gKTsiLCAiY29uc29sZS5pbmZvKCdtaXhlZF9vbmx5OiBDRiB1c2FnZSBlbmRwb2ludCBkaXNhYmxlZDsgdXNpbmcgemVybyB1c2FnZScpOyIpCgojIEFkbWluL2xvZ2luL25vS1YgcGFnZXMgbXVzdCBub3QgcHJveHkgZWR0LXBhZ2VzIG9yIGFueSB0aGlyZC1wYXJ0eSBVSS4Kb25jZSgiaWYgKCHnrqHnkIblkZjlr4bnoIEpIHJldHVybiBmZXRjaChQYWdlc+mdmeaAgemhtemdoiArICcvbm9BRE1JTicpLnRoZW4ociA9PiB7IGNvbnN0IGhlYWRlcnMgPSBuZXcgSGVhZGVycyhyLmhlYWRlcnMpOyBoZWFkZXJzLnNldCgnQ2FjaGUtQ29udHJvbCcsICduby1zdG9yZSwgbm8tY2FjaGUsIG11c3QtcmV2YWxpZGF0ZSwgcHJveHktcmV2YWxpZGF0ZScpOyBoZWFkZXJzLnNldCgnUHJhZ21hJywgJ25vLWNhY2hlJyk7IGhlYWRlcnMuc2V0KCdFeHBpcmVzJywgJzAnKTsgcmV0dXJuIG5ldyBSZXNwb25zZShyLmJvZHksIHsgc3RhdHVzOiA0MDQsIHN0YXR1c1RleHQ6IHIuc3RhdHVzVGV4dCwgaGVhZGVycyB9KSB9KTsiLCAiaWYgKCHnrqHnkIblkZjlr4bnoIEpIHJldHVybiBuZXcgUmVzcG9uc2UoJ0FkbWluIGRpc2FibGVkJywgeyBzdGF0dXM6IDQwNCB9KTsiKQpvbmNlKCJyZXR1cm4gZmV0Y2goUGFnZXPpnZnmgIHpobXpnaIgKyAnL2xvZ2luJyk7IiwgInJldHVybiBuZXcgUmVzcG9uc2UoJ0xvZ2luIFVJIGRpc2FibGVkJywgeyBzdGF0dXM6IDQwNCB9KTsiKQpvbmNlKCJyZXR1cm4gZmV0Y2goUGFnZXPpnZnmgIHpobXpnaIgKyAnL2FkbWluJyArIHVybC5zZWFyY2gpOyIsICJyZXR1cm4gbmV3IFJlc3BvbnNlKCdBZG1pbiBVSSBkaXNhYmxlZCcsIHsgc3RhdHVzOiA0MDQgfSk7IikKb25jZSgifSBlbHNlIGlmICghZW52VVVJRCkgcmV0dXJuIGZldGNoKFBhZ2Vz6Z2Z5oCB6aG16Z2iICsgJy9ub0tWJykudGhlbihyID0+IHsgY29uc3QgaGVhZGVycyA9IG5ldyBIZWFkZXJzKHIuaGVhZGVycyk7IGhlYWRlcnMuc2V0KCdDYWNoZS1Db250cm9sJywgJ25vLXN0b3JlLCBuby1jYWNoZSwgbXVzdC1yZXZhbGlkYXRlLCBwcm94eS1yZXZhbGlkYXRlJyk7IGhlYWRlcnMuc2V0KCdQcmFnbWEnLCAnbm8tY2FjaGUnKTsgaGVhZGVycy5zZXQoJ0V4cGlyZXMnLCAnMCcpOyByZXR1cm4gbmV3IFJlc3BvbnNlKHIuYm9keSwgeyBzdGF0dXM6IDQwNCwgc3RhdHVzVGV4dDogci5zdGF0dXNUZXh0LCBoZWFkZXJzIH0pIH0pOyIsICJ9IGVsc2UgaWYgKCFlbnZVVUlEKSByZXR1cm4gbmV3IFJlc3BvbnNlKCdLViByZXF1aXJlZCcsIHsgc3RhdHVzOiA0MDQgfSk7IikKCiMgRm9yY2Ugb25lIG5hdGl2ZSBtaXhlZCBidWlsZGVyIGluZGVwZW5kZW50IG9mIHF1ZXJ5IHRhcmdldCwgVUEsIGI2NCwgY29udmVydGVyIGhlYWRlcnMsIG9yIHN1Yj0uCnBhdHRlcm4gPSByImNvbnN0IOiuoumYheexu+WeiyA9IGlzU3ViQ29udmVydGVyUmVxdWVzdC4qPzogJ21peGVkJzsiCnRleHQsIGNvdW50ID0gcmUuc3VibihwYXR0ZXJuLCAiY29uc3Qg6K6i6ZiF57G75Z6LID0gJ21peGVkJzsgLy8gbWl4ZWRfb25seTogbmF0aXZlIG1peGVkIGZvciBldmVyeSBVQS90YXJnZXQiLCB0ZXh0LCBjb3VudD0xLCBmbGFncz1yZS5TKQppZiBjb3VudCAhPSAxOiByYWlzZSBTeXN0ZW1FeGl0KGYnYW5jaG9yIGNvdW50IHtjb3VudH0sIGV4cGVjdGVkIDE6IHN1YnNjcmlwdGlvbiB0eXBlJykKb25jZSgiaWYgKCF1cmwuc2VhcmNoUGFyYW1zLmhhcygnc3ViJykgJiYgY29uZmlnX0pTT04u5LyY6YCJ6K6i6ZiF55Sf5oiQLmxvY2FsKSB7IC8vIOacrOWcsOeUn+aIkOiuoumYhSIsICJpZiAodHJ1ZSkgeyAvLyBtaXhlZF9vbmx5OiBmaXhlZCBsb2NhbCBBREQgc291cmNlOyBpZ25vcmUgc3ViIGFuZCBjb25maWd1cmVkIFNVQiIpCm9uY2UoImNvbnN0IOWNj+iuruexu+WeiyA9ICgodXJsLnNlYXJjaFBhcmFtcy5oYXMoJ3N1cmdlJykgfHwgdWEuaW5jbHVkZXMoJ3N1cmdlJykpICYmIGNvbmZpZ19KU09OLuWNj+iuruexu+WeiyAhPT0gJ3NzJykgPyAndHJvJyArICdqYW4nIDogY29uZmlnX0pTT04u5Y2P6K6u57G75Z6LOyIsICJjb25zdCDljY/orq7nsbvlnosgPSBjb25maWdfSlNPTi7ljY/orq7nsbvlnos7IC8vIG1peGVkX29ubHk6IHByb3RvY29sIGlzIGNvbmZpZy1vbmx5LCBuZXZlciBVQS9xdWVyeSBzZWxlY3RlZCIpCnBhdHRlcm4gPSByImNvbnN0IOWujOaVtOS8mOmAieWIl+ihqCA9IGNvbmZpZ19KU09OXC7kvJjpgInorqLpmIXnlJ/miJBcLuacrOWcsElQ5bqTXC7pmo/mnLpJUCBcPyBcKC4qP1xuXHMqXClcWzBcXTsiCnRleHQsIGNvdW50ID0gcmUuc3VibihwYXR0ZXJuLCAiY29uc3Qg5a6M5pW05LyY6YCJ5YiX6KGoID0gYXdhaXQg5pW055CG5oiQ5pWw57uEKGF3YWl0IG1peGVkT25seVJlYWRBREQoZW52KSk7IiwgdGV4dCwgY291bnQ9MSwgZmxhZ3M9cmUuUykKaWYgY291bnQgIT0gMToKICAgIHJhaXNlIFN5c3RlbUV4aXQoZidhbmNob3IgY291bnQge2NvdW50fSwgZXhwZWN0ZWQgMTogZml4ZWQgQUREIGxpc3QgZXhwcmVzc2lvbicpCm9uY2UoImxldCDkvJjpgInorqLpmIXnlJ/miJDlmahIT1NUID0gdXJsLnNlYXJjaFBhcmFtcy5nZXQoJ3N1YicpIHx8IGNvbmZpZ19KU09OLuS8mOmAieiuoumYheeUn+aIkC5TVUI7IiwgInRocm93IG5ldyBFcnJvcignbWl4ZWRfb25seTogYWx0ZXJuYXRlIHN1YnNjcmlwdGlvbiBzb3VyY2VzIGFyZSBkaXNhYmxlZCcpOyIpCiMgVGhlIHVucmVhY2hhYmxlIGFsdGVybmF0ZSBicmFuY2ggcmVtYWlucyBzeW50YWN0aWNhbGx5IHZhbGlkIGJ1dCBjYW5ub3QgYmUgc2VsZWN0ZWQuCiMgUmVtb3ZlIGFsbCBvdXRwdXQgZm9ybWF0IGNvbnZlcnRlcnMgYW5kIGJhc2U2NC9VQSB0cmFuc2Zvcm1hdGlvbnMuCm9uY2UoImlmICjorqLpmIXnsbvlnosgPT09ICdtaXhlZCcgJiYgKCF1YS5pbmNsdWRlcygnbW96aWxsYScpIHx8IHVybC5zZWFyY2hQYXJhbXMuaGFzKCdiNjQnKSB8fCB1cmwuc2VhcmNoUGFyYW1zLmhhcygnYmFzZTY0JykpKSDorqLpmIXlhoXlrrkgPSBidG9hKOiuoumYheWGheWuuSk7IiwgIi8vIG1peGVkX29ubHk6IG5hdGl2ZSBwbGFpbnRleHQgbWl4ZWQgb3V0cHV0OyBuZXZlciBiYXNlNjQgYnkgVUEvdGFyZ2V0IikKb25jZSgiaWYgKOiuoumYheexu+WeiyA9PT0gJ3Npbmdib3gnKSB7IiwgImlmIChmYWxzZSkgeyIpCm9uY2UoIn0gZWxzZSBpZiAo6K6i6ZiF57G75Z6LID09PSAnY2xhc2gnKSB7IiwgIn0gZWxzZSBpZiAoZmFsc2UpIHsiKQojIERvIG5vdCBtdXRhdGUgbmF0aXZlIG1peGVkIG91dHB1dCBmb3IgU3VyZ2UvTG9vbi4Kb25jZSgiaWYgKGlzTG9vbk9yU3VyZ2UpIOWujOaVtOiKgueCuei3r+W+hCA9IOWujOaVtOiKgueCuei3r+W+hC5yZXBsYWNlKC8sL2csICclMkMnKTsiLCAiLy8gbWl4ZWRfb25seTogcHJlc2VydmUgbmF0aXZlIG1peGVkIHBhdGggYnl0ZXMgZm9yIFN1cmdlL0xvb24gYW5kIGFsbCBvdGhlciBjbGllbnRzIikKCiMgQWRtaW4gQUREIHJlYWQgbXVzdCBmYWlsIGNsb3NlZCByYXRoZXIgdGhhbiBnZW5lcmF0aW5nIHJhbmRvbSBmYWxsYmFjay4KcGF0dGVybiA9IHIibGV0IOacrOWcsOS8mOmAiUlQID0gYXdhaXQgZW52XC5LVlwuZ2V0XCgnQUREXC50eHQnXCkgXHxcfCAnbnVsbCc7XG5ccyppZiBcKOacrOWcsOS8mOmAiUlQID09ICdudWxsJ1wpIOacrOWcsOS8mOmAiUlQID0gLio/O1xuXHMqcmV0dXJuIG5ldyBSZXNwb25zZVwo5pys5Zyw5LyY6YCJSVAsIFx7W15cbl0rXH1cKTsiCnJlcGxhY2VtZW50ID0gInRyeSB7XG5jb25zdCDmnKzlnLDkvJjpgIlJUCA9IGF3YWl0IG1peGVkT25seVJlYWRBREQoZW52KTtcbnJldHVybiBuZXcgUmVzcG9uc2Uo5pys5Zyw5LyY6YCJSVAsIHsgc3RhdHVzOiAyMDAsIGhlYWRlcnM6IHsgJ0NvbnRlbnQtVHlwZSc6ICd0ZXh0L3BsYWluO2NoYXJzZXQ9dXRmLTgnLCAnYXNuJzogcmVxdWVzdC5jZi5hc24gfSB9KTtcbn0gY2F0Y2ggKGVycm9yKSB7IHJldHVybiBuZXcgUmVzcG9uc2UoJ0FERCB1bmF2YWlsYWJsZScsIHsgc3RhdHVzOiA0MDQgfSk7IH0iCnRleHQsIGNvdW50ID0gcmUuc3VibihwYXR0ZXJuLCByZXBsYWNlbWVudCwgdGV4dCwgY291bnQ9MSkKaWYgY291bnQgIT0gMTogcmFpc2UgU3lzdGVtRXhpdChmJ2FuY2hvciBjb3VudCB7Y291bnR9LCBleHBlY3RlZCAxOiBhZG1pbiBBREQgcmVhZCcpCgojIEVuc3VyZSBubyBjcmVkZW50aWFsLWRlcml2ZWQgaWRlbnRpZmllcnMgYXJlIHB1dCBpbnRvIG91dGJvdW5kIFVBcyBpbiByZWFjaGFibGUgY29kZS4KZXhhY3QoIicgVWlkLzB4JyArIHVpZCArICcgVmVyc2lvbi8nIiwgIicgVmVyc2lvbi8nIiwgMikKCk9VVC5wYXJlbnQubWtkaXIocGFyZW50cz1UcnVlLCBleGlzdF9vaz1UcnVlKQpPVVQud3JpdGVfdGV4dCh0ZXh0LCBlbmNvZGluZz0ndXRmLTgnKQpwYXRjaGVkID0gaGFzaGxpYi5zaGEyNTYodGV4dC5lbmNvZGUoKSkuaGV4ZGlnZXN0KCkKcHJpbnQoZid3cm90ZSB7T1VUfScpCnByaW50KGYnc291cmNlX3NoYTI1Nj17YWN0dWFsfScpCnByaW50KGYncGF0Y2hlZF9zaGEyNTY9e3BhdGNoZWR9JykK' | base64 --decode > "${workdir}/apply_mixed_only_patch.py"
+          # Adapt only the patch copy, leaving the source patch untouched.
+          python3 - "${workdir}/apply_mixed_only_patch.py" "${workdir}/patch-runtime.py" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1]).read_text(encoding='utf-8')
+          p = p.replace('from pathlib import Path\n', 'from pathlib import Path\nimport os\n', 1)
+          p = p.replace("Path('/tmp/edgetunnel-src/_worker.js')", "Path(os.environ['MIXED_SOURCE'])", 1)
+          p = p.replace("Path('/tmp/gate-mixed-prep/_worker.patched.js')", "Path(os.environ['MIXED_OUTPUT'])", 1)
+          Path(sys.argv[2]).write_text(p, encoding='utf-8')
+          PY
+          MIXED_SOURCE="${workdir}/_worker.js" MIXED_OUTPUT="${workdir}/_worker.patched.js" \
+            python3 "${workdir}/patch-runtime.py"
+          printf '%s  %s\n' '2863c50c86c94db69548665c4a3784e779dac75c3b9450217dbcdc8deddb8294' "${workdir}/_worker.patched.js" | sha256sum --check --status || {
+            echo 'ERROR: deterministic mixed-only final SHA-256 mismatch; no version will be uploaded.' >&2
+            exit 1
+          }
+
           api_get() {
             local label="$1" path="$2" outfile="$3" status
             if ! status="$(curl --silent --show-error --fail-with-body \
@@ -70,6 +90,7 @@ jobs:
           api_get deployments-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/deployments?per_page=1" "${workdir}/deployments-before.json"
           api_get settings-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/script-settings" "${workdir}/settings-before.json"
           api_get active-detail-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions/${EXPECTED_ACTIVE_VERSION}" "${workdir}/active-detail-before.json"
+          api_get latest-detail-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions/${EXPECTED_LATEST_STAGED_VERSION}" "${workdir}/latest-detail-before.json"
 
           python3 - "${workdir}" <<'PY'
           import json, re, sys
@@ -77,6 +98,7 @@ jobs:
 
           root = Path(sys.argv[1])
           expected_active = "a1fd22b0-0143-4fb3-90fe-8412825161f8"
+          expected_latest_staged = "361a12fd-afc5-4211-b7b9-671d5b6bddc8"
           expected_kv = "7753e217441a4e948e62eee3d262b5e0"
           expected_date = "2026-11-25"
           expected_bindings = {
@@ -120,6 +142,8 @@ jobs:
                   kind = item.get("type")
                   if not isinstance(kind, str):
                       fail(f"{label} binding type")
+                  if name == "OFF_LOG" and "text" in item and item.get("text") != "1":
+                      fail(f"{label} OFF_LOG value is not 1")
                   nsid = item.get("namespace_id") if kind == "kv_namespace" else None
                   observed[name] = (kind, nsid)
               if observed != expected_bindings:
@@ -209,8 +233,8 @@ jobs:
           deployments = load("deployments-before.json").get("result", {}).get("deployments")
           if not isinstance(versions, list) or not versions or not isinstance(versions[0], dict):
               fail("versions-before structure")
-          if versions[0].get("id") != expected_active:
-              fail("latest version changed since preflight")
+          if versions[0].get("id") != expected_latest_staged:
+              fail("latest staged version changed since preflight")
           if not isinstance(deployments, list) or not deployments or not isinstance(deployments[0], dict):
               fail("deployments-before structure")
           dep_versions = deployments[0].get("versions")
@@ -223,6 +247,15 @@ jobs:
               fail("active version detail")
           active_bindings = bindings_of(active_detail, "active")
           active_runtime = runtime_of(active_detail, "active")
+          latest_detail = load("latest-detail-before.json").get("result")
+          if not isinstance(latest_detail, dict):
+              fail("latest staged version detail")
+          if latest_detail.get("id") not in (None, expected_latest_staged):
+              fail("latest staged detail identity changed")
+          latest_bindings = bindings_of(latest_detail, "latest staged")
+          latest_runtime = runtime_of(latest_detail, "latest staged")
+          if latest_bindings != active_bindings or latest_runtime != active_runtime:
+              fail("latest staged detail does not match active before inheritance")
           settings_before = setting_summary(load("settings-before.json"), "before upload")
           (root / "settings-summary-before.json").write_text(json.dumps(settings_before, sort_keys=True), encoding="utf-8")
           print("Pre-upload checks passed: active version, exact approved bindings, runtime compatibility, and script settings.")
@@ -239,8 +272,8 @@ jobs:
               "compatibility_flags": [],
               "keep_bindings": ["kv_namespace", "secret_text", "plain_text"],
               "annotations": {
-                  "workers/message": "Stage fixed edgetunnel source; no deployment",
-                  "workers/tag": "gate-edgetunnel-source-5b2aaf0-6e77a975",
+                  "workers/message": "Stage fixed mixed-only edgetunnel source; no deployment",
+                  "workers/tag": "gate-edgetunnel-mixed-only-5b2aaf0-6e77a975",
               },
           }
           (root / "metadata.json").write_text(json.dumps(metadata, separators=(",", ":")), encoding="utf-8")
@@ -284,7 +317,7 @@ jobs:
             -H "@${workdir}/authorization.header" \
             -H 'Accept: application/json' \
             -F "metadata=@${workdir}/metadata.json;type=application/json" \
-            -F "_worker.js=@${workdir}/_worker.js;filename=_worker.js;type=application/javascript+module" \
+            -F "_worker.js=@${workdir}/_worker.patched.js;filename=_worker.js;type=application/javascript+module" \
             -o "${workdir}/upload.json" -w '%{http_code}' \
             "${CF_API_BASE}/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions?bindings_inherit=strict" \
             2>"${workdir}/upload.curlerr")"; then
