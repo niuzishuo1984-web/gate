@@ -134,6 +134,21 @@ def die(section: str, msg: str, code: int = 2) -> None:
     raise SystemExit(code)
 
 
+def redact_secret(value: Any, secret: str) -> Any:
+    """递归移除敏感令牌，防止 Worker 回显内容进入日志或发布产物。"""
+    if not secret:
+        return value
+    if isinstance(value, str):
+        return value.replace(secret, "[REDACTED]")
+    if isinstance(value, dict):
+        return {key: redact_secret(item, secret) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_secret(item, secret) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_secret(item, secret) for item in value)
+    return value
+
+
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
@@ -276,6 +291,7 @@ class Config:
     vpngate_api: str
     vpngate_mirror: str
     worker_base: str
+    worker_token: str
     concurrency: int
     check_timeout: float
     deadline_s: float
@@ -298,6 +314,9 @@ class Config:
             if domain:
                 raw_worker = f"https://{domain}/check?sstp=vpn:vpn@"
         worker_base = normalize_worker_base(raw_worker)
+        worker_token = os.environ.get("WORKER_TOKEN", "").strip()
+        if not worker_token:
+            raise ConfigError("未配置 Worker 认证令牌（WORKER_TOKEN），拒绝发送未授权请求")
 
         static_raw = os.environ.get("HOSTS_ENTRY", "").strip()
         if not static_raw:
@@ -310,6 +329,7 @@ class Config:
             vpngate_api=os.environ.get("VPNGATE_API", DEFAULT_VPNGATE_API),
             vpngate_mirror=os.environ.get("VPNGATE_MIRROR", DEFAULT_VPNGATE_MIRROR),
             worker_base=worker_base,
+            worker_token=worker_token,
             concurrency=_env_int("CHECK_CONCURRENCY", 32, minimum=1),
             check_timeout=_env_float("CHECK_TIMEOUT", 25.0, minimum=1.0),
             deadline_s=_env_float("CHECK_DEADLINE", 1200.0, minimum=30.0),
@@ -604,6 +624,7 @@ def check_one(
     node: Node,
     session: requests.Session,
     worker_base: str,
+    worker_token: str,
     timeout: float,
 ) -> dict[str, Any]:
     result: dict[str, Any] = node.to_dict()
@@ -623,12 +644,20 @@ def check_one(
         }
     )
     url = worker_base + quote(f"{node.host}:{node.port}", safe="")
+
+    def finish() -> dict[str, Any]:
+        return redact_secret(result, worker_token)
+
     try:
-        response = session.get(url, timeout=timeout)
+        response = session.get(
+            url,
+            headers={"Authorization": f"Bearer {worker_token}"},
+            timeout=timeout,
+        )
         if response.status_code != 200:
             result["error"] = f"HTTP {response.status_code}"
             result["worker_error"] = True
-            return result
+            return finish()
 
         payload = response.json()
         success = bool(payload.get("success"))
@@ -657,11 +686,11 @@ def check_one(
             result["residential"] = classify_network(org, exit_info.get("is_datacenter"))
         elif success:
             result["residential"] = "unknown"
-        return result
+        return finish()
     except Exception as exc:  # noqa: BLE001 - 单节点失败不影响整体
         result["error"] = f"{type(exc).__name__}: {exc}"
         result["worker_error"] = True
-        return result
+        return finish()
 
 
 def check_all(
@@ -674,7 +703,7 @@ def check_all(
     deadline = time.monotonic() + cfg.deadline_s
     with ThreadPoolExecutor(max_workers=cfg.concurrency) as pool:
         futures = {
-            pool.submit(check_one, node, session, cfg.worker_base, cfg.check_timeout): node
+            pool.submit(check_one, node, session, cfg.worker_base, cfg.worker_token, cfg.check_timeout): node
             for node in nodes
         }
         pending = set(futures)
