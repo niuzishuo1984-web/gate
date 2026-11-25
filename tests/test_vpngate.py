@@ -1,4 +1,6 @@
 import base64
+import threading
+import time
 
 import pytest
 
@@ -15,6 +17,7 @@ def make_config(**overrides):
         vpngate_api="http://example.invalid/api",
         vpngate_mirror="https://example.invalid/mirror.json",
         worker_base="https://worker.example.com/check?sstp=vpn:vpn@",
+        worker_token="test-worker-token",
         concurrency=4,
         check_timeout=5.0,
         deadline_s=60.0,
@@ -77,6 +80,81 @@ def test_normalize_worker_query_without_path():
 def test_normalize_worker_empty_raises():
     with pytest.raises(ConfigError):
         vpngate.normalize_worker_base("")
+
+
+def test_config_requires_worker_token(monkeypatch):
+    monkeypatch.setenv("CHECK_WORKER", "https://worker.invalid.test/check?sstp=vpn:vpn@")
+    monkeypatch.delenv("WORKER_TOKEN", raising=False)
+    with pytest.raises(ConfigError, match="WORKER_TOKEN"):
+        vpngate.Config.load()
+
+
+class _Response:
+    def __init__(self, status_code, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+class _Session:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.response
+
+
+def test_check_one_sends_bearer_header_and_redacts_token_from_result():
+    token = "super-secret-worker-token"
+    session = _Session(_Response(200, {"success": False, "error": f"echoed {token}"}))
+    node = Node("node.example", 443, "192.0.2.1", "Japan", "JP")
+
+    result = vpngate.check_one(node, session, "https://worker.example/check?sstp=x", token, 5)
+
+    assert session.calls[0][1]["headers"] == {"Authorization": f"Bearer {token}"}
+    assert token not in repr(result)
+    assert result["error"] == "echoed [REDACTED]"
+
+
+def test_check_one_wrong_token_fails_closed_without_leaking_token():
+    token = "wrong-worker-token"
+    session = _Session(_Response(401))
+    node = Node("node.example", 443, "192.0.2.1", "Japan", "JP")
+
+    result = vpngate.check_one(node, session, "https://worker.example/check?sstp=x", token, 5)
+
+    assert result["success"] is False
+    assert result["worker_error"] is True
+    assert result["error"] == "HTTP 401"
+    assert token not in repr(result)
+
+
+def test_check_all_does_not_wait_for_running_thread_after_deadline(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_check(*args):
+        started.set()
+        release.wait(timeout=2)
+        return {"success": False}
+
+    monkeypatch.setattr(vpngate, "check_one", blocking_check)
+    nodes = [Node(f"node-{i}.example", 443, "192.0.2.1", "Japan", "JP") for i in range(3)]
+    cfg = make_config(concurrency=1, deadline_s=0.01)
+    started_at = time.monotonic()
+    results, timed_out = vpngate.check_all(nodes, _Session(_Response(200)), cfg)
+    elapsed = time.monotonic() - started_at
+    release.set()
+
+    assert started.is_set()
+    assert elapsed < 0.8
+    assert timed_out == 3
+    assert len(results) == 3
+    assert all(result["error"] == "整体检测超时，未完成" for result in results)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +237,21 @@ def test_to_sstp_nodes_keeps_full_domain_and_skips_missing_proto():
     nodes = vpngate.to_sstp_nodes(rows)
     assert len(nodes) == 1
     assert nodes[0].host == "public-vpn-10.opengw.net"
+
+
+def test_to_sstp_nodes_drops_non_single_label_opengw_hosts():
+    config = b64("proto tcp\nremote 1.1.1.1 443\n")
+    rows = [
+        {"host": "good-node", "ip": "1.1.1.1", "config_b64": config},
+        {"host": "nested.good-node.opengw.net", "ip": "1.1.1.2", "config_b64": config},
+        {"host": "good-node.evil.example", "ip": "1.1.1.3", "config_b64": config},
+        {"host": "opengw.net", "ip": "1.1.1.4", "config_b64": config},
+        {"host": "bad node", "ip": "1.1.1.5", "config_b64": config},
+    ]
+
+    nodes = vpngate.to_sstp_nodes(rows)
+
+    assert [node.host for node in nodes] == ["good-node.opengw.net"]
 
 
 def test_parse_mirror_json_reads_servers():
@@ -261,6 +354,24 @@ def test_build_nodes_text_sanitizes_remark_and_dedupes_links():
 def test_build_nodes_text_requires_edge_pool():
     with pytest.raises(ConfigError):
         vpngate.build_nodes_text(sample_data(), [], make_config())
+
+
+def test_write_outputs_rejects_empty_nodes_before_overwriting_existing_files(tmp_path):
+    public_dir = tmp_path / "public"
+    public_dir.mkdir()
+    old_files = {
+        "data.json": "old-data",
+        "index.html": "old-html",
+        "nodes.txt": "old-node\n",
+    }
+    for name, content in old_files.items():
+        (public_dir / name).write_text(content, encoding="utf-8")
+    cfg = make_config(public_dir=str(public_dir))
+
+    with pytest.raises(ConfigError, match=r"nodes\.txt 为空"):
+        vpngate.write_outputs({"countries": {}}, cfg, ["edge.example.com:443"])
+
+    assert {name: (public_dir / name).read_text(encoding="utf-8") for name in old_files} == old_files
 
 
 def test_build_outputs_stats_and_country_grouping():
