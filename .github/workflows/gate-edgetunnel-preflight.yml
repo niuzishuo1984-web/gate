@@ -122,10 +122,16 @@ jobs:
           def safe_detail(obj, label):
               resources = obj.get("resources")
               if not isinstance(resources, dict): fail(f"{label}.resources")
-              bindings = resources.get("bindings", {})
-              if not isinstance(bindings, dict): fail(f"{label}.bindings")
+              if "bindings" not in resources: fail(f"{label}.bindings absent")
+              bindings = resources["bindings"]
+              if isinstance(bindings, list):
+                  pairs = [(x.get("name"), x) if isinstance(x, dict) else (None, None) for x in bindings]
+              elif isinstance(bindings, dict):
+                  pairs = list(bindings.items())
+              else:
+                  fail(f"{label}.bindings type")
               clean_bindings = []
-              for name, value in bindings.items():
+              for name, value in pairs:
                   if not isinstance(name, str) or not name or not isinstance(value, dict): fail(f"{label}.binding")
                   btype = value.get("type")
                   if not isinstance(btype, str) or not btype: fail(f"{label}.binding type")
