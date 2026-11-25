@@ -1,0 +1,178 @@
+name: Cloudflare gate-edgetunnel read-only preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CF_ACCOUNT_ID: "45a90a0900f07418cb0bb622a8437081"
+      CF_SCRIPT_NAME: "gate-edgetunnel"
+      CF_API_BASE: "https://api.cloudflare.com/client/v4"
+    steps:
+      - name: Read-only Cloudflare preflight
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_EDGETUNNEL_DEPLOY_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          workdir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cf-preflight.XXXXXX")"
+          cleanup() { rm -rf -- "$workdir"; }
+          trap cleanup EXIT HUP INT TERM
+
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo 'ERROR: Cloudflare token secret is unavailable.' >&2
+            exit 1
+          fi
+
+          api_get() {
+            local label="$1" path="$2" outfile="$3" status
+            if ! status="$(curl --silent --show-error --fail-with-body \
+              --connect-timeout 10 --max-time 45 \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H 'Accept: application/json' \
+              -o "$outfile" -w '%{http_code}' \
+              "${CF_API_BASE}${path}" 2>"${workdir}/${label}.curlerr")"; then
+              echo "ERROR: Cloudflare ${label} request failed (HTTP ${status:-unknown})." >&2
+              exit 1
+            fi
+            if [[ "$status" != 200 ]]; then
+              echo "ERROR: Cloudflare ${label} returned HTTP ${status}." >&2
+              exit 1
+            fi
+          }
+
+          api_get versions "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions?per_page=1" "${workdir}/versions.json"
+          api_get deployments "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/deployments?per_page=1" "${workdir}/deployments.json"
+          api_get settings "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/script-settings" "${workdir}/settings.json"
+
+          python3 - "$workdir" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
+
+          def fail(msg):
+              print(f"ERROR: unsafe or unexpected Cloudflare response structure ({msg}).", file=sys.stderr)
+              raise SystemExit(1)
+
+          def load(name):
+              try:
+                  with (root / name).open(encoding="utf-8") as fh:
+                      obj = json.load(fh)
+              except Exception:
+                  fail("invalid JSON")
+              if not isinstance(obj, dict) or obj.get("success") is not True:
+                  fail("API success flag is not true")
+              return obj
+
+          versions_api = load("versions.json")
+          deployments_api = load("deployments.json")
+          settings_api = load("settings.json")
+
+          vi = versions_api.get("result", {}).get("items") if isinstance(versions_api.get("result"), dict) else None
+          di = deployments_api.get("result", {}).get("deployments") if isinstance(deployments_api.get("result"), dict) else None
+          if not isinstance(vi, list) or not vi or not isinstance(vi[0], dict): fail("versions.items")
+          if not isinstance(di, list) or not di or not isinstance(di[0], dict): fail("deployments.deployments")
+          latest = vi[0]
+          current_deployment = di[0]
+          latest_id = latest.get("id")
+          if not isinstance(latest_id, str) or not UUID.fullmatch(latest_id): fail("latest version id")
+
+          dep_versions = current_deployment.get("versions")
+          if not isinstance(dep_versions, list) or not dep_versions: fail("deployment versions")
+          for entry in dep_versions:
+              if not isinstance(entry, dict) or not isinstance(entry.get("version_id"), str) or not UUID.fullmatch(entry["version_id"]): fail("deployment version entry")
+              if not isinstance(entry.get("percentage"), (int, float)) or isinstance(entry.get("percentage"), bool): fail("deployment percentage")
+          deployed_ids = [x["version_id"] for x in dep_versions]
+          deployed_id = deployed_ids[0] if len(deployed_ids) == 1 else None
+          if deployed_id is None: fail("current deployment is not a single-version deployment")
+
+          def scalar(src, key, typ, required=False):
+              value = src.get(key)
+              if value is None and not required: return None
+              if not isinstance(value, typ) or (typ is str and not value): fail(key)
+              return value
+
+          def version_detail(version_id, label):
+              # The detail endpoint is fetched only after IDs are validated.
+              import subprocess
+              out = root / f"{label}.json"
+              url = f"https://api.cloudflare.com/client/v4/accounts/45a90a0900f07418cb0bb622a8437081/workers/scripts/gate-edgetunnel/versions/{version_id}"
+              try:
+                  subprocess.run(["curl", "--silent", "--show-error", "--fail-with-body", "--connect-timeout", "10", "--max-time", "45", "-H", "Authorization: Bearer " + __import__('os').environ["CLOUDFLARE_API_TOKEN"], "-H", "Accept: application/json", "-o", str(out), url], check=True, stderr=subprocess.DEVNULL)
+                  data = json.loads(out.read_text(encoding="utf-8"))
+              except Exception:
+                  fail(f"{label} detail request")
+              if not isinstance(data, dict) or data.get("success") is not True or not isinstance(data.get("result"), dict): fail(f"{label} detail envelope")
+              return data["result"]
+
+          # The token is inherited by this process only; it is never printed.
+          import os
+          deployed_detail = version_detail(deployed_id, "deployed-detail")
+          latest_detail = version_detail(latest_id, "latest-detail")
+
+          def safe_detail(obj, label):
+              resources = obj.get("resources")
+              if not isinstance(resources, dict): fail(f"{label}.resources")
+              bindings = resources.get("bindings", {})
+              if not isinstance(bindings, dict): fail(f"{label}.bindings")
+              clean_bindings = []
+              for name, value in bindings.items():
+                  if not isinstance(name, str) or not name or not isinstance(value, dict): fail(f"{label}.binding")
+                  btype = value.get("type")
+                  if not isinstance(btype, str) or not btype: fail(f"{label}.binding type")
+                  item = {"name": name, "type": btype}
+                  if btype == "kv_namespace":
+                      nsid = value.get("namespace_id")
+                      if not isinstance(nsid, str) or not nsid: fail(f"{label}.KV namespace id")
+                      item["namespace_id"] = nsid
+                  clean_bindings.append(item)
+              runtime = resources.get("script_runtime")
+              if not isinstance(runtime, dict): fail(f"{label}.script_runtime")
+              date = runtime.get("compatibility_date")
+              flags = runtime.get("compatibility_flags", [])
+              if date is not None and not isinstance(date, str): fail(f"{label}.compatibility_date")
+              if not isinstance(flags, list) or not all(isinstance(x, str) for x in flags): fail(f"{label}.compatibility_flags")
+              return {"bindings": clean_bindings, "compatibility_date": date, "compatibility_flags": flags}
+
+          settings = settings_api.get("result")
+          if not isinstance(settings, dict) or not isinstance(settings.get("observability"), dict) or not isinstance(settings["observability"].get("enabled"), bool): fail("settings.observability.enabled")
+
+          def version_summary(v):
+              md = v.get("metadata", {})
+              if not isinstance(md, dict): fail("version metadata")
+              result = {"id": v["id"]}
+              if "number" in v:
+                  if not isinstance(v["number"], (int, float)) or isinstance(v["number"], bool): fail("version number")
+                  result["number"] = v["number"]
+              for k in ("created_on", "modified_on", "source"):
+                  if k in md:
+                      if not isinstance(md[k], str): fail(f"version metadata {k}")
+                      result[k] = md[k]
+              return result
+
+          output = {
+              "worker": "gate-edgetunnel",
+              "deployed_version_id": deployed_id,
+              "latest_version": version_summary(latest),
+              "deployed_version_details": safe_detail(deployed_detail, "deployed"),
+              "latest_version_details": safe_detail(latest_detail, "latest"),
+              "settings": {"observability_enabled": settings["observability"]["enabled"]},
+              "deployment": {
+                  "id": scalar(current_deployment, "id", str, True),
+                  "created_on": scalar(current_deployment, "created_on", str, True),
+                  "source": scalar(current_deployment, "source", str, True),
+                  "strategy": scalar(current_deployment, "strategy", str, True),
+                  "versions": [{"version_id": x["version_id"], "percentage": x["percentage"]} for x in dep_versions],
+              },
+          }
+          print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
+          PY
