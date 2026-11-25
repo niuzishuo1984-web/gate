@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Rebuild the audited SSTP-only worker; every input/output is verified."""
-import base64, hashlib, json, subprocess, tempfile, urllib.request, zlib
+import base64
+import hashlib
+import json
+import subprocess
+import tempfile
+import urllib.request
+import zlib
 from pathlib import Path
 
 URL = "https://raw.githubusercontent.com/lsh8848/cm-Workers-CheckSocks5/2f31cf9a242444eb22905d888d4d8871b0625b3a/_worker.js"
