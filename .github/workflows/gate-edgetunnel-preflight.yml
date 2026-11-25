@@ -144,7 +144,25 @@ jobs:
               return {"bindings": clean_bindings, "compatibility_date": date, "compatibility_flags": flags}
 
           settings = settings_api.get("result")
-          if not isinstance(settings, dict) or not isinstance(settings.get("observability"), dict) or not isinstance(settings["observability"].get("enabled"), bool): fail("settings.observability.enabled")
+          if not isinstance(settings, dict): fail("settings object")
+          obs = settings.get("observability")
+          if "observability" not in settings:
+              obs_out = {"state": "absent"}
+          elif obs is None:
+              obs_out = {"state": "null"}
+          elif isinstance(obs, dict):
+              enabled = obs.get("enabled")
+              if enabled is not None and not isinstance(enabled, bool): fail("settings.observability.enabled")
+              obs_out = {"state": "object", "enabled": enabled}
+              for section in ("logs", "traces"):
+                  value = obs.get(section)
+                  if value is not None:
+                      if not isinstance(value, dict): fail("settings.observability." + section)
+                      section_enabled = value.get("enabled")
+                      if section_enabled is not None and not isinstance(section_enabled, bool): fail("settings.observability." + section + ".enabled")
+                      obs_out[section] = {"enabled": section_enabled}
+          else:
+              fail("settings.observability")
 
           def version_summary(v):
               md = v.get("metadata", {})
@@ -165,7 +183,7 @@ jobs:
               "latest_version": version_summary(latest),
               "deployed_version_details": safe_detail(deployed_detail, "deployed"),
               "latest_version_details": safe_detail(latest_detail, "latest"),
-              "settings": {"observability_enabled": settings["observability"]["enabled"]},
+              "settings": {"observability": obs_out},
               "deployment": {
                   "id": scalar(current_deployment, "id", str, True),
                   "created_on": scalar(current_deployment, "created_on", str, True),
