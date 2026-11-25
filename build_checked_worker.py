@@ -37,6 +37,10 @@ text = mini.decode("utf-8")
 parts = [["s",0,9383],["s",9389,2],["l","!"],["s",9392,63],["l",";"],["s",9455,1],["l",";"],["s",9462,4592],["l","return"],["s",14054,891],["l",","],["s",14952,30163]]
 result = "".join(text[o[1]:o[1]+o[2]] if o[0] == "s" else o[1] for o in parts).encode("utf-8")
 verify(result, FINAL_SHA)
+# Add missing helpers after validating the pinned original worker.
+HELPERS = ';\n\nfunction indexOfHeaderEnd(bytes) {\n  for (let i = 0; i + 3 < bytes.byteLength; i++) {\n    if (bytes[i] === 13 && bytes[i + 1] === 10 && bytes[i + 2] === 13 && bytes[i + 3] === 10) return i + 4;\n  }\n  for (let i = 0; i + 1 < bytes.byteLength; i++) {\n    if (bytes[i] === 10 && bytes[i + 1] === 10) return i + 2;\n  }\n  return -1;\n}\nfunction normalizeTxtValue(value) {\n  return String(value ?? \'\').replace(/^"|"$/g, \'\').replace(/\\\\"/g, \'"\');\n}\n'
+result += HELPERS.encode("utf-8")
+verify(result, "b262a97aae66ebc0aa616e7281af7e5c5cc82b7bcb3edb369ac47d193756084f")
 Path("_worker.js").write_bytes(result)
 subprocess.run(["node", "--check", "_worker.js"], check=True)
 print("Audited worker reconstructed and verified.")
