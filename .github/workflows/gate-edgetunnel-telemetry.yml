@@ -1,0 +1,53 @@
+name: Disable gate-edgetunnel telemetry (no deploy)
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: gate-edgetunnel-stage
+  cancel-in-progress: false
+jobs:
+  disable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_EDGETUNNEL_DEPLOY_TOKEN }}
+    steps:
+      - name: Patch and verify script settings without publishing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, sys, urllib.error, urllib.request
+          base = 'https://api.cloudflare.com/client/v4/accounts/45a90a0900f07418cb0bb622a8437081/workers/scripts/gate-edgetunnel'
+          token = os.environ.pop('CF_TOKEN', '')
+          if not token: sys.exit('ERROR: scoped token unavailable')
+          def call(path, method='GET', body=None):
+              req = urllib.request.Request(base+path, data=None if body is None else json.dumps(body).encode(), method=method, headers={'Authorization':'Bearer '+token, 'Content-Type':'application/json'})
+              try:
+                  with urllib.request.urlopen(req, timeout=40) as resp: data=json.load(resp)
+              except urllib.error.HTTPError as exc:
+                  print('ERROR', method, path, 'HTTP', exc.code, file=sys.stderr)
+                  try: print('API error codes:', [x.get('code') for x in json.load(exc).get('errors',[])], file=sys.stderr)
+                  except Exception: pass
+                  sys.exit(1)
+              if not data.get('success'): sys.exit('ERROR: API unsuccessful')
+              return data['result']
+          before=call('/deployments?per_page=1')
+          want={'logpush':False,'tail_consumers':[],'observability':{'enabled':False,'issues':{'enabled':False},'agents':{'enabled':False,'persist':False},'logs':{'enabled':False,'invocation_logs':False,'persist':False,'destinations':[]},'traces':{'enabled':False,'persist':False,'destinations':[]}}}
+          call('/script-settings','PATCH',want)
+          got=call('/script-settings')
+          after=call('/deployments?per_page=1')
+          def check(a,b,path='result'):
+              if isinstance(b,dict):
+                  if not isinstance(a,dict): raise ValueError(path+' not an explicit object')
+                  for k,v in b.items():
+                      if k not in a: raise ValueError(path+'.'+k+' missing')
+                      check(a[k],v,path+'.'+k)
+              elif a!=b or type(a) is not type(b): raise ValueError(path+' not explicitly '+repr(b))
+          print('Non-secret relevant settings:',json.dumps({k:got.get(k) for k in want}))
+          try:
+              check(got,want)
+              if before!=after: raise ValueError('deployment changed during operation')
+          except ValueError as exc: sys.exit('ERROR: verification failed: '+str(exc))
+          print('Verified explicit settings; deployment unchanged.')
+          PY
