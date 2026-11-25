@@ -1,0 +1,468 @@
+name: Stage gate-edgetunnel version (no deploy)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-edgetunnel-stage
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CF_ACCOUNT_ID: "45a90a0900f07418cb0bb622a8437081"
+      CF_SCRIPT_NAME: "gate-edgetunnel"
+      CF_API_BASE: "https://api.cloudflare.com/client/v4"
+      EXPECTED_ACTIVE_VERSION: "a1fd22b0-0143-4fb3-90fe-8412825161f8"
+      EXPECTED_KV_ID: "7753e217441a4e948e62eee3d262b5e0"
+      EXPECTED_SOURCE_SHA256: "6e77a97570b9a9371fc5b1ad91c66054fb18bbd34b892d4ce0046fc2ccddedaa"
+      UPSTREAM_COMMIT: "5b2aaf0daf7fa1b126170877f64dd8d2e34c2746"
+    steps:
+      - name: Verify and stage fixed upstream source without deploying
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_EDGETUNNEL_DEPLOY_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          workdir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cf-stage.XXXXXX")"
+          cleanup() { rm -rf -- "$workdir"; }
+          trap cleanup EXIT HUP INT TERM
+
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo 'ERROR: Cloudflare deployment token secret is unavailable.' >&2
+            exit 1
+          fi
+          printf 'Authorization: Bearer %s\n' "$CLOUDFLARE_API_TOKEN" > "${workdir}/authorization.header"
+          unset CLOUDFLARE_API_TOKEN
+
+          curl --silent --show-error --fail --connect-timeout 10 --max-time 90 \
+            "https://raw.githubusercontent.com/cmliu/edgetunnel/${UPSTREAM_COMMIT}/_worker.js" \
+            -o "${workdir}/_worker.js" 2>"${workdir}/source.curlerr"
+          printf '%s  %s\n' "$EXPECTED_SOURCE_SHA256" "${workdir}/_worker.js" | sha256sum --check --status || {
+            echo 'ERROR: fixed upstream source SHA-256 did not match.' >&2
+            exit 1
+          }
+
+          api_get() {
+            local label="$1" path="$2" outfile="$3" status
+            if ! status="$(curl --silent --show-error --fail-with-body \
+              --connect-timeout 10 --max-time 45 \
+              -H "@${workdir}/authorization.header" \
+              -H 'Accept: application/json' \
+              -o "$outfile" -w '%{http_code}' \
+              "${CF_API_BASE}${path}" 2>"${workdir}/${label}.curlerr")"; then
+              echo "ERROR: Cloudflare ${label} request failed (HTTP ${status:-unknown})." >&2
+              exit 1
+            fi
+            if [[ "$status" != 200 ]]; then
+              echo "ERROR: Cloudflare ${label} returned HTTP ${status}." >&2
+              exit 1
+            fi
+          }
+
+          api_get versions-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions?per_page=1" "${workdir}/versions-before.json"
+          api_get deployments-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/deployments?per_page=1" "${workdir}/deployments-before.json"
+          api_get settings-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/script-settings" "${workdir}/settings-before.json"
+          api_get active-detail-before "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions/${EXPECTED_ACTIVE_VERSION}" "${workdir}/active-detail-before.json"
+
+          python3 - "${workdir}" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          expected_active = "a1fd22b0-0143-4fb3-90fe-8412825161f8"
+          expected_kv = "7753e217441a4e948e62eee3d262b5e0"
+          expected_date = "2026-11-25"
+          expected_bindings = {
+              "ADMIN": ("secret_text", None),
+              "KEY": ("secret_text", None),
+              "KV": ("kv_namespace", expected_kv),
+              "OFF_LOG": ("plain_text", None),
+          }
+          uuid = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
+
+          def fail(message):
+              print(f"ERROR: safe stage check failed ({message}); no version will be uploaded.", file=sys.stderr)
+              raise SystemExit(1)
+
+          def load(name):
+              try:
+                  data = json.loads((root / name).read_text(encoding="utf-8"))
+              except Exception:
+                  fail(f"invalid {name}")
+              if not isinstance(data, dict) or data.get("success") is not True:
+                  fail(f"API response not successful: {name}")
+              return data
+
+          def bindings_of(detail, label):
+              resources = detail.get("resources")
+              if not isinstance(resources, dict) or "bindings" not in resources:
+                  fail(f"{label} binding list absent")
+              bindings = resources["bindings"]
+              if isinstance(bindings, list):
+                  entries = [(item.get("name"), item) if isinstance(item, dict) else (None, None) for item in bindings]
+              elif isinstance(bindings, dict):
+                  entries = list(bindings.items())
+              else:
+                  fail(f"{label} binding list type")
+              observed = {}
+              for name, item in entries:
+                  if not isinstance(name, str) or not name or not isinstance(item, dict):
+                      fail(f"{label} binding entry")
+                  if name in observed:
+                      fail(f"{label} duplicate binding name")
+                  kind = item.get("type")
+                  if not isinstance(kind, str):
+                      fail(f"{label} binding type")
+                  nsid = item.get("namespace_id") if kind == "kv_namespace" else None
+                  observed[name] = (kind, nsid)
+              if observed != expected_bindings:
+                  fail(f"{label} binding names/types/namespace differ from approved baseline")
+              return [
+                  {"name": name, "type": kind, **({"namespace_id": nsid} if nsid else {})}
+                  for name, (kind, nsid) in sorted(observed.items())
+              ]
+
+          def runtime_of(detail, label):
+              resources = detail.get("resources")
+              runtime = resources.get("script_runtime") if isinstance(resources, dict) else None
+              if not isinstance(runtime, dict):
+                  fail(f"{label} runtime missing")
+              date = runtime.get("compatibility_date")
+              flags = runtime.get("compatibility_flags", [])
+              if date != expected_date or not isinstance(flags, list) or flags:
+                  fail(f"{label} compatibility settings differ from approved baseline")
+              return {"compatibility_date": date, "compatibility_flags": flags}
+
+          def setting_summary(data, label):
+              result = data.get("result")
+              if not isinstance(result, dict):
+                  fail(f"{label} script-settings result")
+              if "logpush" not in result:
+                  logpush = {"state": "absent"}
+              elif result["logpush"] is None:
+                  logpush = {"state": "null"}
+              elif isinstance(result["logpush"], bool):
+                  logpush = {"state": "value", "enabled": result["logpush"]}
+              else:
+                  fail(f"{label} logpush type")
+              if "tail_consumers" not in result:
+                  tails = {"state": "absent"}
+              elif result["tail_consumers"] is None:
+                  tails = {"state": "null"}
+              elif isinstance(result["tail_consumers"], list):
+                  tails = {"state": "list", "count": len(result["tail_consumers"])}
+              else:
+                  fail(f"{label} tail-consumer type")
+              if "observability" not in result:
+                  obs = {"state": "absent"}
+              elif result["observability"] is None:
+                  obs = {"state": "null"}
+              elif isinstance(result["observability"], dict):
+                  source = result["observability"]
+                  obs = {"state": "object"}
+                  for field in ("enabled", "logs", "traces", "issues", "agents"):
+                      if field not in source:
+                          obs[field] = {"state": "absent"}
+                      elif source[field] is None:
+                          obs[field] = {"state": "null"}
+                      elif field == "enabled" and isinstance(source[field], bool):
+                          obs[field] = {"state": "value", "enabled": source[field]}
+                      elif isinstance(source[field], dict):
+                          part = source[field]
+                          entry = {"state": "object"}
+                          for key in ("enabled", "invocation_logs", "persist"):
+                              if key in part:
+                                  value = part[key]
+                                  if value is not None and not isinstance(value, bool):
+                                      fail(f"{label} observability {field}.{key} type")
+                                  entry[key] = value
+                          if "destinations" in part:
+                              dests = part["destinations"]
+                              if not isinstance(dests, list) or not all(isinstance(x, str) for x in dests):
+                                  fail(f"{label} observability {field}.destinations type")
+                              entry["destination_count"] = len(dests)
+                          obs[field] = entry
+                      else:
+                          fail(f"{label} observability {field} type")
+              else:
+                  fail(f"{label} observability type")
+              if logpush.get("enabled") is True:
+                  fail(f"{label} Logpush is enabled unexpectedly")
+              if tails.get("count", 0) != 0:
+                  fail(f"{label} tail consumers are configured unexpectedly")
+              if obs.get("enabled", {}).get("enabled") is True:
+                  fail(f"{label} observability is enabled unexpectedly")
+              for field in ("logs", "traces", "issues"):
+                  part = obs.get(field, {})
+                  if part.get("enabled") is True:
+                      fail(f"{label} observability {field} are enabled unexpectedly")
+              return {"logpush": logpush, "observability": obs, "tail_consumers": tails}
+
+          versions = load("versions-before.json").get("result", {}).get("items")
+          deployments = load("deployments-before.json").get("result", {}).get("deployments")
+          if not isinstance(versions, list) or not versions or not isinstance(versions[0], dict):
+              fail("versions-before structure")
+          if versions[0].get("id") != expected_active:
+              fail("latest version changed since preflight")
+          if not isinstance(deployments, list) or not deployments or not isinstance(deployments[0], dict):
+              fail("deployments-before structure")
+          dep_versions = deployments[0].get("versions")
+          if not isinstance(dep_versions, list) or len(dep_versions) != 1:
+              fail("active deployment is not a single-version deployment")
+          if dep_versions[0].get("version_id") != expected_active or dep_versions[0].get("percentage") != 100:
+              fail("active deployment changed since preflight")
+          active_detail = load("active-detail-before.json").get("result")
+          if not isinstance(active_detail, dict):
+              fail("active version detail")
+          active_bindings = bindings_of(active_detail, "active")
+          active_runtime = runtime_of(active_detail, "active")
+          settings_before = setting_summary(load("settings-before.json"), "before upload")
+          (root / "settings-summary-before.json").write_text(json.dumps(settings_before, sort_keys=True), encoding="utf-8")
+          print("Pre-upload checks passed: active version, exact approved bindings, runtime compatibility, and script settings.")
+          print(json.dumps({"active_version_id": expected_active, "bindings": active_bindings, "runtime": active_runtime, "settings": settings_before}, indent=2, sort_keys=True))
+          PY
+
+          python3 - "$workdir" <<'PY'
+          import json, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          metadata = {
+              "main_module": "_worker.js",
+              "compatibility_date": "2026-11-25",
+              "compatibility_flags": [],
+              "keep_bindings": ["kv_namespace", "secret_text", "plain_text"],
+              "annotations": {
+                  "workers/message": "Stage fixed edgetunnel source; no deployment",
+                  "workers/tag": "gate-edgetunnel-source-5b2aaf0-6e77a975",
+              },
+          }
+          (root / "metadata.json").write_text(json.dumps(metadata, separators=(",", ":")), encoding="utf-8")
+          PY
+
+          # Repeat immediately before the write. GitHub concurrency cannot lock out
+          # unrelated Cloudflare operators; any mismatch aborts without uploading.
+          api_get versions-recheck "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions?per_page=1" "${workdir}/versions-recheck.json"
+          api_get deployments-recheck "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/deployments?per_page=1" "${workdir}/deployments-recheck.json"
+          api_get settings-recheck "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/script-settings" "${workdir}/settings-recheck.json"
+          python3 - "$workdir" <<'PY'
+          import json, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          def result(name):
+              try:
+                  data = json.loads((root / name).read_text(encoding="utf-8"))
+                  if not isinstance(data, dict) or data.get("success") is not True:
+                      raise ValueError()
+                  return data["result"]
+              except Exception:
+                  print("ERROR: pre-upload recheck response invalid; no version uploaded.", file=sys.stderr)
+                  raise SystemExit(1)
+          try:
+              if result("settings-before.json") != result("settings-recheck.json"):
+                  raise ValueError("script settings")
+              before_version = result("versions-before.json")["items"][0]["id"]
+              after_version = result("versions-recheck.json")["items"][0]["id"]
+              before_dep = result("deployments-before.json")["deployments"][0]
+              after_dep = result("deployments-recheck.json")["deployments"][0]
+              if before_version != after_version or before_dep != after_dep:
+                  raise ValueError("version or deployment")
+          except (KeyError, IndexError, TypeError, ValueError):
+              print("ERROR: pre-upload baseline changed or was invalid; no version uploaded.", file=sys.stderr)
+              raise SystemExit(1)
+          print("Immediately pre-upload: latest version, deployment and complete script settings unchanged.")
+          PY
+
+          if ! status="$(curl --silent --show-error --fail-with-body \
+            --connect-timeout 10 --max-time 300 \
+            -H "@${workdir}/authorization.header" \
+            -H 'Accept: application/json' \
+            -F "metadata=@${workdir}/metadata.json;type=application/json" \
+            -F "_worker.js=@${workdir}/_worker.js;filename=_worker.js;type=application/javascript+module" \
+            -o "${workdir}/upload.json" -w '%{http_code}' \
+            "${CF_API_BASE}/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions?bindings_inherit=strict" \
+            2>"${workdir}/upload.curlerr")"; then
+            echo "ERROR: Cloudflare version upload failed (HTTP ${status:-unknown}); production was not deployed." >&2
+            exit 1
+          fi
+          if [[ "$status" != "200" ]]; then
+            echo "ERROR: Cloudflare version upload returned HTTP ${status}; production was not deployed." >&2
+            exit 1
+          fi
+
+          version_id="$(python3 - "${workdir}/upload.json" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          try:
+              data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              result = data.get("result") if isinstance(data, dict) else None
+              version_id = result.get("id") if isinstance(result, dict) else None
+              if data.get("success") is not True or not isinstance(version_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", version_id):
+                  raise ValueError()
+          except Exception:
+              print("ERROR: Cloudflare did not return a valid staged version ID.", file=sys.stderr)
+              raise SystemExit(1)
+          print(version_id)
+          PY
+          )"
+          if [[ ! "$version_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+            echo 'ERROR: invalid staged version identifier; production was not deployed.' >&2
+            exit 1
+          fi
+
+          api_get staged-detail "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions/${version_id}" "${workdir}/staged-detail.json"
+          api_get versions-after "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/versions?per_page=1" "${workdir}/versions-after.json"
+          api_get deployments-after "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/deployments?per_page=1" "${workdir}/deployments-after.json"
+          api_get settings-after "/accounts/${CF_ACCOUNT_ID}/workers/scripts/${CF_SCRIPT_NAME}/script-settings" "${workdir}/settings-after.json"
+
+          python3 - "$workdir" "$version_id" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          staged_id = sys.argv[2]
+          active_id = "a1fd22b0-0143-4fb3-90fe-8412825161f8"
+          expected_kv = "7753e217441a4e948e62eee3d262b5e0"
+          expected_bindings = {
+              "ADMIN": ("secret_text", None),
+              "KEY": ("secret_text", None),
+              "KV": ("kv_namespace", expected_kv),
+              "OFF_LOG": ("plain_text", None),
+          }
+
+          def fail(message):
+              print(f"ERROR: safe post-upload verification failed ({message}); staged version will remain undeployed.", file=sys.stderr)
+              raise SystemExit(1)
+
+          def load(name):
+              try:
+                  data = json.loads((root / name).read_text(encoding="utf-8"))
+              except Exception:
+                  fail(f"invalid {name}")
+              if not isinstance(data, dict) or data.get("success") is not True:
+                  fail(f"API response not successful: {name}")
+              return data
+
+          def bindings_of(detail):
+              resources = detail.get("resources")
+              if not isinstance(resources, dict) or "bindings" not in resources:
+                  fail("staged binding list absent")
+              bindings = resources["bindings"]
+              if isinstance(bindings, list):
+                  entries = [(item.get("name"), item) if isinstance(item, dict) else (None, None) for item in bindings]
+              elif isinstance(bindings, dict):
+                  entries = list(bindings.items())
+              else:
+                  fail("staged binding list type")
+              observed = {}
+              for name, item in entries:
+                  if not isinstance(name, str) or not name or not isinstance(item, dict) or not isinstance(item.get("type"), str):
+                      fail("staged binding entry")
+                  if name in observed:
+                      fail("staged duplicate binding name")
+                  kind = item["type"]
+                  observed[name] = (kind, item.get("namespace_id") if kind == "kv_namespace" else None)
+              if observed != expected_bindings:
+                  fail("staged bindings do not match the approved set")
+              return [
+                  {"name": name, "type": kind, **({"namespace_id": nsid} if nsid else {})}
+                  for name, (kind, nsid) in sorted(observed.items())
+              ]
+
+          def runtime_of(detail):
+              resources = detail.get("resources")
+              runtime = resources.get("script_runtime") if isinstance(resources, dict) else None
+              if not isinstance(runtime, dict):
+                  fail("staged runtime missing")
+              date = runtime.get("compatibility_date")
+              flags = runtime.get("compatibility_flags", [])
+              if date != "2026-11-25" or not isinstance(flags, list) or flags:
+                  fail("staged compatibility settings differ from approved baseline")
+              return {"compatibility_date": date, "compatibility_flags": flags}
+
+          def setting_summary(data, label):
+              result = data.get("result")
+              if not isinstance(result, dict):
+                  fail(f"{label} script-settings result")
+              logpush = {"state": "absent"} if "logpush" not in result else ({"state": "null"} if result["logpush"] is None else {"state": "value", "enabled": result["logpush"]} if isinstance(result["logpush"], bool) else None)
+              if logpush is None: fail(f"{label} logpush type")
+              tails = {"state": "absent"} if "tail_consumers" not in result else ({"state": "null"} if result["tail_consumers"] is None else {"state": "list", "count": len(result["tail_consumers"])} if isinstance(result["tail_consumers"], list) else None)
+              if tails is None: fail(f"{label} tail-consumer type")
+              obs_value = result.get("observability", "__absent__")
+              if obs_value == "__absent__":
+                  obs = {"state": "absent"}
+              elif obs_value is None:
+                  obs = {"state": "null"}
+              elif isinstance(obs_value, dict):
+                  obs = {"state": "object"}
+                  for field in ("enabled", "logs", "traces", "issues", "agents"):
+                      if field not in obs_value:
+                          obs[field] = {"state": "absent"}
+                      elif obs_value[field] is None:
+                          obs[field] = {"state": "null"}
+                      elif field == "enabled" and isinstance(obs_value[field], bool):
+                          obs[field] = {"state": "value", "enabled": obs_value[field]}
+                      elif isinstance(obs_value[field], dict):
+                          part = obs_value[field]
+                          entry = {"state": "object"}
+                          for key in ("enabled", "invocation_logs", "persist"):
+                              if key in part:
+                                  if part[key] is not None and not isinstance(part[key], bool): fail(f"{label} observability {field}.{key} type")
+                                  entry[key] = part[key]
+                          if "destinations" in part:
+                              if not isinstance(part["destinations"], list) or not all(isinstance(x, str) for x in part["destinations"]): fail(f"{label} destinations type")
+                              entry["destination_count"] = len(part["destinations"])
+                          obs[field] = entry
+                      else:
+                          fail(f"{label} observability {field} type")
+              else:
+                  fail(f"{label} observability type")
+              if logpush.get("enabled") is True or tails.get("count", 0) != 0 or obs.get("enabled", {}).get("enabled") is True:
+                  fail(f"{label} export/observability settings changed or unexpectedly enabled")
+              for field in ("logs", "traces", "issues"):
+                  if obs.get(field, {}).get("enabled") is True:
+                      fail(f"{label} observability {field} unexpectedly enabled")
+              return {"logpush": logpush, "observability": obs, "tail_consumers": tails}
+
+          version_data = load("versions-after.json").get("result", {}).get("items")
+          if not isinstance(version_data, list) or not version_data or not isinstance(version_data[0], dict) or version_data[0].get("id") != staged_id:
+              fail("staged version is not latest")
+          deployments = load("deployments-after.json").get("result", {}).get("deployments")
+          if not isinstance(deployments, list) or not deployments or not isinstance(deployments[0], dict):
+              fail("deployment response structure")
+          before_deployments = load("deployments-before.json").get("result", {}).get("deployments")
+          if not isinstance(before_deployments, list) or not before_deployments or deployments[0] != before_deployments[0]:
+              fail("active deployment record changed during staging")
+          active_versions = deployments[0].get("versions")
+          if not isinstance(active_versions, list) or len(active_versions) != 1 or active_versions[0].get("version_id") != active_id or active_versions[0].get("percentage") != 100:
+              fail("active production deployment changed during staging")
+          staged_detail = load("staged-detail.json").get("result")
+          if not isinstance(staged_detail, dict):
+              fail("staged version detail")
+          staged_bindings = bindings_of(staged_detail)
+          runtime = runtime_of(staged_detail)
+          settings_before = json.loads((root / "settings-summary-before.json").read_text(encoding="utf-8"))
+          settings_after_raw = load("settings-after.json")
+          if load("settings-before.json").get("result") != settings_after_raw.get("result"):
+              fail("complete script settings changed during version staging")
+          settings_after = setting_summary(settings_after_raw, "after upload")
+          if settings_before != settings_after:
+              fail("script settings changed during version staging")
+          print("STAGING VERIFIED; NO DEPLOYMENT WAS CREATED.")
+          print(json.dumps({
+              "staged_version_id": staged_id,
+              "active_deployment_version_id": active_id,
+              "active_deployment_unchanged": True,
+              "bindings": staged_bindings,
+              "runtime": runtime,
+              "script_settings_unchanged": True,
+              "settings": settings_after,
+              "source_sha256_verified": True,
+          }, indent=2, sort_keys=True))
+          PY
