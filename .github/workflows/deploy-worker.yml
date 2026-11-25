@@ -26,7 +26,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo '2b6b31cc53b48c3cf0ba9a5967337feb6b45d5964ca0ed30da10a1bbf038bb50  build_checked_worker.py' | sha256sum -c -
+          echo '646bd063e3be54a8b7641c721d72c6b00ec6105f3333c6ed05ebfb7ac7781ec5  build_checked_worker.py' | sha256sum -c -
           echo 'd721324a2894f2488ae66b3ddd478fc7192b7f3340c3457daf796cf72a3c47f9  wrangler.toml' | sha256sum -c -
       - name: Build and verify Worker
         shell: bash
