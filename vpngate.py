@@ -9,8 +9,8 @@
   5. 合并静态优选域名与优选 API 端点
   6. 生成 public/data.json + public/index.html + public/nodes.txt
 
-配置全部来自环境变量。模板仓库约定：用户只需在仓库里配置 Secret `DOMAIN`，
-工作流会拼出检测地址；本地运行时可以直接设置 CHECK_WORKER。
+配置全部来自环境变量。发布工作流使用固定的公开 Worker 地址，只有 WORKER_TOKEN
+需要作为 Secret 配置；本地运行时可以直接设置 CHECK_WORKER。
 """
 
 from __future__ import annotations
@@ -108,6 +108,7 @@ COUNTRY_ZH = {
 
 _PROTO_TCP_RE = re.compile(r"^proto\s+(tcp|tcp4|tcp6|tcp-client)\b", re.M)
 _REMOTE_RE = re.compile(r"^remote\s+(\S+)\s+(\d+)", re.M)
+_VPNGATE_HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.opengw\.net$")
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +180,7 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
 
 
 def normalize_worker_base(raw: str) -> str:
-    """把 CHECK_WORKER / DOMAIN 归一化成以 `sstp=vpn:vpn@` 结尾的检测地址前缀。
+    """把 CHECK_WORKER 归一化成以 `sstp=vpn:vpn@` 结尾的检测地址前缀。
 
     允许的写法：
       - https://abc.workers.dev/check?sstp=vpn:vpn@
@@ -189,15 +190,12 @@ def normalize_worker_base(raw: str) -> str:
     value = (raw or "").strip()
     if not value:
         raise ConfigError(
-            "未配置检测 Worker 地址。请在仓库 Settings → Secrets and variables → Actions "
-            "添加 Secret `DOMAIN`（只填 host，例如 abc.workers.dev），"
-            "或本地运行时设置环境变量 CHECK_WORKER。"
+            "未配置检测 Worker 地址，请设置环境变量 CHECK_WORKER。"
         )
     lowered = value.lower()
     if any(marker.lower() in lowered for marker in PLACEHOLDER_MARKERS):
         raise ConfigError(
-            "检测地址仍是占位符。请在仓库 Settings → Secrets and variables → Actions "
-            "添加 Secret `DOMAIN`（只填 host，例如 abc.workers.dev），工作流会自动拼出检测地址。"
+            "检测地址仍是占位符，请设置有效的 CHECK_WORKER。"
         )
     if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
         value = "https://" + value
@@ -309,10 +307,6 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         raw_worker = os.environ.get("CHECK_WORKER", "").strip()
-        if not raw_worker:
-            domain = os.environ.get("DOMAIN", "").strip()
-            if domain:
-                raw_worker = f"https://{domain}/check?sstp=vpn:vpn@"
         worker_base = normalize_worker_base(raw_worker)
         worker_token = os.environ.get("WORKER_TOKEN", "").strip()
         if not worker_token:
@@ -330,11 +324,11 @@ class Config:
             vpngate_mirror=os.environ.get("VPNGATE_MIRROR", DEFAULT_VPNGATE_MIRROR),
             worker_base=worker_base,
             worker_token=worker_token,
-            concurrency=_env_int("CHECK_CONCURRENCY", 32, minimum=1),
+            concurrency=_env_int("CHECK_CONCURRENCY", 5, minimum=1),
             check_timeout=_env_float("CHECK_TIMEOUT", 25.0, minimum=1.0),
             deadline_s=_env_float("CHECK_DEADLINE", 1200.0, minimum=30.0),
             http_timeout=_env_float("HTTP_TIMEOUT", 60.0, minimum=5.0),
-            max_check_nodes=_env_int("MAX_CHECK_NODES", 0),
+            max_check_nodes=_env_int("MAX_CHECK_NODES", 20),
             public_dir=os.environ.get("PUBLIC_DIR", os.path.join(REPO_DIR, "public")),
             template_html=os.path.join(REPO_DIR, "web", "index.html"),
             edge_hosts=tuple(edge_hosts),
@@ -559,12 +553,15 @@ def to_sstp_nodes(rows: Iterable[dict[str, Any]]) -> list[Node]:
         if not 1 <= port <= 65535:
             continue
 
-        host = (row.get("host") or "").strip().lower()
+        host = (row.get("host") or "").strip().lower().rstrip(".")
         if not host:
             continue
         # VPN Gate 主机名有时是 public-vpn-153，有时已是完整域名
         if "." not in host:
             host = f"{host}.opengw.net"
+        # 官方 HTTP 数据可能被篡改；自动候选只接受单标签 *.opengw.net。
+        if not _VPNGATE_HOST_RE.fullmatch(host):
+            continue
 
         nodes.append(
             Node(
@@ -701,7 +698,9 @@ def check_all(
     """并发检测；返回 (结果列表, 因整体超时未完成的数量)。"""
     results: list[dict[str, Any]] = []
     deadline = time.monotonic() + cfg.deadline_s
-    with ThreadPoolExecutor(max_workers=cfg.concurrency) as pool:
+    pool = ThreadPoolExecutor(max_workers=cfg.concurrency)
+    timed_out = False
+    try:
         futures = {
             pool.submit(check_one, node, session, cfg.worker_base, cfg.worker_token, cfg.check_timeout): node
             for node in nodes
@@ -712,38 +711,47 @@ def check_all(
                 pending.discard(future)
                 results.append(future.result())
         except TimeoutError:
-            log("CLOUDFLARE WORKER", f"整体检测超时（{cfg.deadline_s:.0f}s），未完成的节点按失败处理")
+            timed_out = True
+            log(
+                "CLOUDFLARE WORKER",
+                f"整体检测超时（{cfg.deadline_s:.0f}s），未完成的节点按失败处理；"
+                "已取消尚未启动的任务，正在运行的线程无法由 Python 强制终止",
+            )
 
-    timed_out = 0
-    for future in pending:
-        node = futures[future]
-        if future.done() and not future.cancelled():
-            # 截止瞬间刚好完成的请求，结果依然有效，不要丢掉
-            try:
-                results.append(future.result())
-                continue
-            except Exception:  # noqa: BLE001
-                pass
-        future.cancel()
-        stub = node.to_dict()
-        stub.update(
-            {
-                "protocol": "sstp",
-                "link": f"sstp://vpn:vpn@{node.host}:{node.port}",
-                "status": "failed",
-                "success": False,
-                "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                "exit": None,
-                "latency_ms": None,
-                "colo": None,
-                "error": "整体检测超时，未完成",
-                "worker_error": False,
-                "residential": "unknown",
-            }
-        )
-        results.append(stub)
-        timed_out += 1
-    return results, timed_out
+        timed_out_count = 0
+        for future in pending:
+            node = futures[future]
+            if future.done() and not future.cancelled():
+                # 截止瞬间刚好完成的请求，结果依然有效，不要丢掉
+                try:
+                    results.append(future.result())
+                    continue
+                except Exception:  # noqa: BLE001
+                    pass
+            future.cancel()
+            stub = node.to_dict()
+            stub.update(
+                {
+                    "protocol": "sstp",
+                    "link": f"sstp://vpn:vpn@{node.host}:{node.port}",
+                    "status": "failed",
+                    "success": False,
+                    "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                    "exit": None,
+                    "latency_ms": None,
+                    "colo": None,
+                    "error": "整体检测超时，未完成",
+                    "worker_error": False,
+                    "residential": "unknown",
+                }
+            )
+            results.append(stub)
+            timed_out_count += 1
+        return results, timed_out_count
+    finally:
+        # 不使用 executor context：其 __exit__ 会隐式 wait，导致整体截止时间失效。
+        # wait=False 只是不再等待；Python 无法强制终止已运行的线程，因此这不是硬截止。
+        pool.shutdown(wait=not timed_out, cancel_futures=timed_out)
 
 
 # ---------------------------------------------------------------------------
@@ -885,7 +893,9 @@ def build_nodes_text(data: dict[str, Any], edge_hosts: list[str], cfg: Config) -
             entry = edge_hosts[index % len(edge_hosts)]
             index += 1
             lines.append(f"{entry}#{sanitize_remark(f'{name}-{kind}-{counters[kind_key]:02d}')}${link}")
-    return "\n".join(lines) + ("\n" if lines else "")
+    if not lines:
+        raise ConfigError("生成的 nodes.txt 为空，拒绝生成")
+    return "\n".join(lines) + "\n"
 
 
 def atomic_write_text(path: str, text: str) -> None:
@@ -900,11 +910,15 @@ def atomic_write_text(path: str, text: str) -> None:
 def write_outputs(
     data: dict[str, Any], cfg: Config, edge_hosts: list[str]
 ) -> tuple[str, str, str, str]:
-    os.makedirs(cfg.public_dir, exist_ok=True)
+    # 在任何产物写入前验证，失败时保留旧产物。
+    nodes_text = build_nodes_text(data, edge_hosts, cfg)
+    if not nodes_text.strip():
+        raise ConfigError("生成的 nodes.txt 为空，拒绝覆盖现有产物")
     data_path = os.path.join(cfg.public_dir, "data.json")
     html_path = os.path.join(cfg.public_dir, "index.html")
     nodes_path = os.path.join(cfg.public_dir, "nodes.txt")
 
+    os.makedirs(cfg.public_dir, exist_ok=True)
     atomic_write_text(data_path, json.dumps(data, ensure_ascii=False, separators=(",", ":")))
 
     if os.path.exists(cfg.template_html):
@@ -919,7 +933,6 @@ def write_outputs(
             ".catch(e=>out.textContent='加载失败: '+e)</script></html>"
         )
     atomic_write_text(html_path, html)
-    nodes_text = build_nodes_text(data, edge_hosts, cfg)
     atomic_write_text(nodes_path, nodes_text)
     return data_path, html_path, nodes_path, nodes_text
 
